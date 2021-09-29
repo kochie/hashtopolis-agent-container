@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      CapacityProviders:
+        - FARGATE_SPOT
+      ClusterName: Hashtopolis
+
+  # Repository:
+  #   Type: AWS::ECR::Repository
+  #   Properties:
+  #     RepositoryName: hashtopolis-client
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ECSTaskExecutionRole-Hashtopolis
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/hashtopolis
+
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: "Hashtopolis-Client"
+      ExecutionRoleArn: !Ref ExecutionRole
+      ContainerDefinitions:
+        - Image: 457234467265.dkr.ecr.us-east-1.amazonaws.com/hashtopolis-client
+          Name: agent
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: "/ecs/hashtopolis"
+              awslogs-region: "us-east-1"
+              awslogs-stream-prefix: "ecs"
+      Cpu: 4096
+      Memory: 8192
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      DesiredCount: 10
+      Cluster: !Ref Cluster
+      ServiceName: hashtopolis-agents
+      LaunchType: FARGATE
+      TaskDefinition: !Ref Task
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - subnet-81fdf88e
+            - subnet-2f9e8d65
+            - subnet-e2dc90be
+            - subnet-11de482f
+            - subnet-6e9cdf09
+            - subnet-e7c48ac9
