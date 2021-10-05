@@ -4,10 +4,170 @@ Resources:
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
-      CapacityProviders:
-        - FARGATE_SPOT
       ClusterName: Hashtopolis
+  
+  # LaunchTemplate:
+  #   Type: AWS::EC2::LaunchTemplate
+  #   Properties: 
+  #     LaunchTemplateName: hashtopolis-gpu-lt
+  #     LaunchTemplateData:
+  CapacityProviderAssociation:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties: 
+      CapacityProviders: 
+        - !Ref CapacityProvider
+        - FARGATE_SPOT
+      Cluster: !Ref Cluster
+      DefaultCapacityProviderStrategy: 
+        - CapacityProvider: !Ref CapacityProvider 
 
+  CapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref ASG
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: 1
+      MaxSize: 20
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          SpotAllocationStrategy: capacity-optimized
+          OnDemandBaseCapacity: 0
+          OnDemandPercentageAboveBaseCapacity: 0
+          # SpotInstancePools: 1
+          # SpotMaxPrice:
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref LaunchTemplate
+            Version: !GetAtt LaunchTemplate.LatestVersionNumber
+          Overrides:
+            - InstanceType: p2.xlarge
+            - InstanceType: p2.8xlarge
+            - InstanceType: p2.16xlarge
+            - InstanceType: p3.2xlarge
+            - InstanceType: p3.8xlarge
+            - InstanceType: p3.16xlarge
+      VPCZoneIdentifier:
+        - subnet-81fdf88e
+        - subnet-2f9e8d65
+        - subnet-e2dc90be
+        - subnet-11de482f
+        - subnet-6e9cdf09
+        - subnet-e7c48ac9
+
+  AutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'application-autoscaling:*'
+                  - 'cloudwatch:DescribeAlarms'
+                  - 'cloudwatch:PutMetricAlarm'
+                  - 'ecs:DescribeServices'
+                  - 'ecs:UpdateService'
+                Resource: '*'
+      
+  ServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 2
+      MinCapacity: 1
+      ResourceId: !Sub service/${Cluster}/${GPUService.Name}
+      RoleARN: !GetAtt AutoscalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: AStepPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: PercentChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 200
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: 2008-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref EC2Role
+  
+  # SecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Security Group for hashtopolis containers
+  #     SecurityGroupIngress:
+  #     - IpProtocol: tcp
+  #       FromPort: 80
+  #       ToPort: 80
+  #       CidrIp: 0.0.0.0/0
+  #     - IpProtocol: tcp
+  #       FromPort: 443
+  #       ToPort: 443
+  #       CidrIp: 0.0.0.0/0
+  #     SecurityGroupEgress:
+  #     - IpProtocol: tcp
+  #       FromPort: 80
+  #       ToPort: 80
+  #       CidrIp: 0.0.0.0/0
+  #     - IpProtocol: tcp
+  #       FromPort: 443
+  #       ToPort: 443
+  #       CidrIp: 0.0.0.0/0
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        ImageId: ami-004bf28d7e5cfae00
+        # SecurityGroupIds:
+        #   - !GetAtt SecurityGroup.GroupId
+
+        UserData: 
+          Fn::Base64: 
+            !Sub |
+              #!/bin/bash
+              cat <<'EOF' >> /etc/ecs/ecs.config
+              ECS_CLUSTER=${Cluster}
+              ECS_ENABLE_SPOT_INSTANCE_DRAINING=true
+              EOF
   # Repository:
   #   Type: AWS::ECR::Repository
   #   Properties:
@@ -54,6 +214,29 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
+  
+  GPUTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: "Hashtopolis-Client-GPU"
+      ExecutionRoleArn: !Ref ExecutionRole
+      ContainerDefinitions:
+        - Image: 457234467265.dkr.ecr.us-east-1.amazonaws.com/hashtopolis-client-gpu
+          Name: agent-gpu
+          Environment:
+            - Name: HASHTOPOLIS_SERVER_URL
+              Value: http://ip-172-31-28-196.ec2.internal/api/server.php
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: "/ecs/hashtopolis"
+              awslogs-region: "us-east-1"
+              awslogs-stream-prefix: "ecs"
+      Cpu: 4096
+      Memory: 8192
+      NetworkMode: bridge
+      RequiresCompatibilities:
+        - EC2
 
   Service:
     Type: AWS::ECS::Service
@@ -73,3 +256,13 @@ Resources:
             - subnet-11de482f
             - subnet-6e9cdf09
             - subnet-e7c48ac9
+
+  GPUService:
+    Type: AWS::ECS::Service
+    Properties:
+      DesiredCount: 1
+      Cluster: !Ref Cluster
+      ServiceName: hashtopolis-agents-gpu
+      LaunchType: EC2
+      TaskDefinition: !Ref GPUTask
+

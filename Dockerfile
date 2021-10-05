@@ -1,8 +1,5 @@
 FROM intelopencl/intel-opencl:ubuntu-20.10-ppa
 
-ENV HASHTOPOLIS_SERVER_URL=https://hashtopolis.kochie.io/api/server.php
-ENV HASHTOPOLIS_VOUCHER=gyaAQnn0
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG INTEL_DRIVER=l_opencl_p_18.1.0.015.tgz
@@ -30,6 +27,9 @@ RUN apt install intel-opencl-icd clinfo -q -y
 RUN pip install psutil requests 
 # RUN wget https://hashtopolis.kochie.io/agents.php?download=2 -O hashtopolis.zip
 COPY hashtopolis.zip .
+
+ENV HASHTOPOLIS_SERVER_URL=https://hashtopolis.kochie.io/api/server.php
+ENV HASHTOPOLIS_VOUCHER=gyaAQnn0
 
 ENTRYPOINT [ "tini", "-g", "-v", "--", "python3", "hashtopolis.zip"]
 
